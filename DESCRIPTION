@@ -1,0 +1,26 @@
+Package: hirem
+Type: Package
+Title: Hierarchical reserving models
+Version: 0.1.0
+Authors@R: person("Jonas", "Crevecoeur", email = "jonas.crevecoeur@kuleuven.be",
+  role = c("aut", "cre"))
+Maintainer: Jonas Crevecoeur <jonas.crevecoeur@kuleuven.be>
+Description: The goal of hirem is to provide an easy programming environment for constructing hierarchical reserving models by adding layers.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Imports:
+    ggplot2,
+    tibble,
+    rlang,
+    gbm,
+    mgcv,
+	magrittr,
+	dplyr,
+	tidyr,
+	purrr
+RoxygenNote: 7.1.1
+Suggests: 
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr

@@ -1,0 +1,202 @@
+---
+title: "Connection individual and aggregate reserving"
+author: "Jonas Crevecoeur"
+date: "22-9-2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+We illustrate three methods for obtaining the reserve estimates fo the chain ladder method. These methods are: Using the ChainLadder package, fitting a Poisson GLM to the aggregated triangle, fitting a hirem to the individual claim data. 
+
+Load the required packages
+```{r}
+require(hirem)
+require(ChainLadder)
+require(tidyverse)
+```
+
+
+We load the observed data for the first six calendar years from the `reserving_data` data set from the `hirem` package.
+
+```{r data}
+data('reserving_data')
+
+observed_data <- reserving_data %>% dplyr::filter(calendar_year <= 6)
+```
+
+The associated runoff triangle is
+
+```{r}
+triangle <- observed_data %>%
+  dplyr::group_by(reporting_year, development_year) %>%
+  summarise(total_paid = sum(size)) %>%
+  ungroup() %>%
+  pivot_wider(names_from = development_year,
+              values_from = total_paid)
+
+print(triangle)
+```
+
+## Chain ladder model with the ChainLadder package
+
+The function `MackChainLadder` in the `ChainLadder` packages estimates the Mack chain ladder model based on a triangle with cumulative amounts paid.
+
+```{r}
+triangle_numeric <- data.matrix(data.frame(triangle)[, 2:7])
+
+# to cumulative payments
+triangle_numeric_cumulatif <- t(apply(triangle_numeric, 1, cumsum))
+
+cl <- MackChainLadder(triangle_numeric_cumulatif)
+
+# to incremental payments
+triangle_full_incr <- t(apply(cl$FullTriangle, 1, function(x){c(x[1], diff(x))}))
+
+triangle_full_incr
+```
+
+
+## Chain ladder model with an aggregated GLM
+
+Let $Y_{ij}$ denote the total amount paid in development year $j$ for claims reported in reporting year $j$. For the chain ladder model, the expected total amount paid can be written as
+
+$$ E(Y_{ij}) = \alpha_i \cdot \beta_j,$$
+
+where $\alpha_i$ can be interpreted as the total cost for reporting year $i$ and $\beta_j$ can be interpreted as the proportion of the total cost that will be paid in development year $j$.
+
+Several GLMs are capable of modelling the same multiplicative structure for the expected total cost. Here, we focus on a Poisson GLM with log-link function.
+
+First, we aggregate the data. 
+
+```{r}
+aggregated <- observed_data %>%
+  dplyr::group_by(reporting_year, development_year) %>%
+  summarise(total_paid = sum(size)) %>%
+  ungroup()
+
+head(aggregated)
+```
+
+Second, we fit the gamma GLM to the aggregated data.
+
+```{r}
+fit_aggregated <- glm(total_paid ~ factor(reporting_year) + factor(development_year),
+                      data = aggregated,
+                      family = poisson(link = 'log'))
+```
+
+Finally, we predict the lower cells of the runoff triangle.
+
+```{r}
+# create cells for the lower triangle
+lower_triangle <- expand.grid(reporting_year = 1:6,
+                              development_year = 1:6) %>%
+  dplyr::mutate(calendar_year = reporting_year + development_year - 1) %>%
+  dplyr::filter(calendar_year > 6)
+
+# predict the total amount paid in these cells using the fitted gamma GLM
+lower_triangle$total_paid = predict(fit_aggregated, newdata = lower_triangle, type = 'response')
+
+# prediction of the lower triangle
+lower_triangle %>% 
+  pivot_wider(id_cols = reporting_year,
+              names_from = development_year,
+              values_from = total_paid) %>%
+  arrange(reporting_year)
+```
+
+
+## Chain ladder model with the hirem package
+
+We demonstrate how the reserve estimates from the chain ladder method can be retrieved by starting from individual claim data.
+
+Let $Y_{kj}$ denote the amount paid for claim $k$ in development year $j$. As with the chain ladder method, we assume a multiplicative structure for the expected claim cost, i.e.
+
+$$E(Y_{kj}) = \tilde{\alpha}_{rep(k)} \cdot \beta_j, $$
+where $rep(k)$ is the reporting year of claim $k$ and $\tilde{\alpha}_{i}$ is the expected claim size for a claim reported in year $i$. If we aggregate claim payments by reporting and development year, we find
+
+$$E(Y_{ij}) = \sum_{k: rep(k) = i} E(Y_{kj}) = \#\{k: rep(k) = i\} \cdot \tilde{\alpha}_{i} \cdot \beta_j. $$
+
+Denote by $n_i$ the number of claims that are reported in reporting year $i$, then
+
+$$E(Y_{ij}) = n_i \cdot \tilde{\alpha}_{i} \cdot \beta_j.$$
+This is the same multiplicative relation for the total amount paid that we encountered earlier, but with $\alpha_i$ replaced by $n_i \cdot \tilde{\alpha}_{i}$. Since $n_i$ is observed, this is just a scaling of the parameters. By adding information on the number of reported claims, we can distinguish between rising costs due to an increase in the number of reported claims or an increase in the average cost per claim.
+
+We can fit this model with a `hirem` with a single layer `size` and covariates `reporting_year` and `development_year`.
+
+The `reserving_data` data set in the `hirem` package contains only data on open claims. Since, settlement is not modelled, we can not condition on the settlement status in our hierarchal model. Therefore, we have to add records to the `reserveing_data` dataset for settled claims.
+
+```{r}
+full_data <- observed_data
+
+for(year in 2:6) {
+  full_data <- rbind(
+    full_data,
+    observed_data %>%
+    dplyr::filter(calendar_year < year,
+                  close == 1) %>%
+    mutate(development_year = year - reporting_year + 1,
+           calendar_year = year,
+           size = 0))
+}
+
+```
+
+This significantly increases the size of the data set, which futher motivates adding settlement status as a covariate in the model. The effect on the simulation will be even larger.
+
+```{r}
+dim(full_data)
+
+dim(observed_data)
+```
+
+
+Construct the `hirem` using invidual data
+
+```{r, warning = FALSE}
+model <- hirem(full_data) %>%
+  layer_glm('size', family = poisson(link = 'log')) %>%
+  fit(size = size ~ factor(development_year) + factor(reporting_year))
+```
+
+Register an updater, for the simulation routine
+
+```{r}
+update <- function(data) {
+  data %>%
+    dplyr::mutate(development_year = development_year + 1,
+                  calendar_year = calendar_year + 1)
+}
+
+model <- register_updater(model, update)
+```
+
+Simulate the development of claims until development year 6
+
+```{r}
+nsim <- 10
+
+simul <- simulate(model,
+                  nsim = nsim,
+                  filter = function(data){dplyr::filter(data, development_year <= 6)},
+                  data = full_data %>% dplyr::filter(calendar_year == 6))
+```
+
+Estimated lower triangle
+
+```{r}
+simul %>%
+  group_by(reporting_year, development_year) %>%
+  summarise(avg_paid = sum(size) / nsim) %>%
+  ungroup() %>%
+  arrange(development_year) %>%
+  pivot_wider(id_cols = reporting_year, values_from = avg_paid, names_from = development_year) %>%
+  arrange(reporting_year)
+```
+
+When `nsim` increases, the simualted lower triangle will converge towards the ChainLadder estimates.
