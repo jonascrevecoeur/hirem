@@ -106,6 +106,7 @@ print.hirem_layer <- function(obj, ...) {
   }
 }
 
+#' @importFrom purrr map_chr
 #' @export
 hirem_get_layer_pos <- function(obj, layer) {
 

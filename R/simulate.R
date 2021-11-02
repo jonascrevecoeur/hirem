@@ -27,6 +27,11 @@ register_updater <- function(obj, update, after = 'end') {
 }
 
 #' @export
+simulate <- function(object, ...) {
+  UseMethod("simulate")
+}
+
+#' @export
 hirem_update <- function(obj, data, after) {
 
   select <- which(obj$update_after == after)
@@ -38,10 +43,14 @@ hirem_update <- function(obj, data, after) {
 }
 
 #' @export
-simulate.layer_glm <- function(obj, data) {
+simulate.layer_glm <- function(obj, data, balance.correction, balance.var) {
   select <- obj$filter(data)
 
   response <- predict(obj$fit, newdata = data[select, ], type = 'response')
+
+  if(balance.correction) {
+    response <- response * obj$balance.correction[(data[select,])[[balance.var]]]
+  }
 
   if(obj$method_options$family == 'binomial') {
     simulation <- runif(length(response)) < response
@@ -67,10 +76,14 @@ simulate.layer_glm <- function(obj, data) {
 }
 
 #' @export
-simulate.layer_gbm <- function(obj, data) {
+simulate.layer_gbm <- function(obj, data, balance.correction, balance.var) {
   select <- obj$filter(data)
 
   response <- predict(obj$fit, n.trees = obj$iter, newdata = data[select, ], type = 'response')
+
+  if(balance.correction) {
+    response <- response * obj$balance.correction[(data[select,])[[balance.var]]]
+  }
 
   if(obj$method_options$distribution == 'bernoulli') {
     simulation <- runif(length(response)) < response
@@ -97,11 +110,13 @@ simulate.layer_gbm <- function(obj, data) {
 #'     \item output: Subset of records for which the simulation should continue
 #' }
 #' @param data Last observed record for each claim. From these records onwards the future development is simulated.
+#' @param balance.correction Logical. Apply a bias correction step: yes or no?
 #'
 #' @return A data set with the same structure as the input data set, containing multiple simulations for the future development of each claim.
-
 #' @export
-simulate.hirem <- function(obj, nsim, filter, data) {
+
+
+simulate.hirem <- function(obj, nsim, filter, data, balance.correction = FALSE) {
   last <- filter(hirem_update(obj, data, 'end'))
 
   # replicate nsim times to create all simulations simultaneously
@@ -115,7 +130,7 @@ simulate.hirem <- function(obj, nsim, filter, data) {
 
       layer <- obj$layers[[index]]
 
-      last[, layer$name] <- simulate(layer, last)
+      last[, layer$name] <- simulate(layer, last, balance.correction, obj$balance.var)
 
       #select <- layer$filter(last)
       #last[, layer$name] <- 0; # reinitialize

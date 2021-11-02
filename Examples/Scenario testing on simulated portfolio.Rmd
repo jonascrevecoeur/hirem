@@ -1,0 +1,266 @@
+---
+title: "Testing the hierarchical reserving models on a simulated portfolio"
+author: "Jens Robben"
+date: "October 2021"
+output: html_document
+bibliography: references.bib  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning = FALSE, message = FALSE)
+options(dplyr.summarise.inform = FALSE)
+```
+
+## Simulating the portfolio
+We evaluate the predictive performance of our hierarchical reserving model (hierarchical GLM and hierarchical GBM) on one portfolio simulated along the extreme event scenario. We compare the results with the ones obtained using an aggregate reserving model, namely the classical chain ladder model.
+
+First, we load the required packages.
+
+```{r, results='hide'}
+require(hirem)
+require(tidyverse)
+```
+
+We simulate one portfolio (with `set.seed = 1`) along the extreme event scenario. The portfolio initially consists of $125\ 000$ claims, but only the claims that are reported between January 1, 2012 and December 31, 2020 are retained. Claims are tracked over 9 development years since reporting. We let the extreme event (of 30 days) occur somewhere randomly in the year 2019. In addition, we create an extra covariate `devYearMonth`, representing a simplified version of the interaction effect between `dev.year` and `rep.month`.
+
+```{r}
+# The complete portfolio
+reserving_data <- simulate_scenario_extreme_event(seed = 1, period_extra = '2019', n = 125000)
+
+# Creating the interaction effect
+reserving_data$monthDev12 <- as.character(reserving_data$rep.month)
+reserving_data$monthDev12[reserving_data$dev.year > 3] <- 'dev.year > 3'
+reserving_data$devYearMonth <- factor(paste(reserving_data$dev.year, reserving_data$monthDev12, sep = '-'))
+
+# Dimension portfolio
+dim(reserving_data)
+```
+ 
+Next, we set the evaluation date to December 31, 2020. The observed portfolio then consists of the claims that are reported before this evaluation date, i.e. with calendar year before year 9.  The prediction data set consists of the remaining claims, namely the claims reported after calendar year 9.
+
+```{r}
+# Observed and prediction data set
+observed_data   <- reserving_data %>% filter(calendar.year <= 9)
+prediction_data <- reserving_data %>% filter(calendar.year > 9)
+```
+
+## Calibration of the hierarhical reserving models
+We first define the weights used in the calibration of the hierarchical reserving model. The purpose of these weights is to replicate the development year distribution from the prediction data set to the observed data set (training data set). Hence, more weight is assigned to claims observations in later development years since reporting. We give a very small weight to the claims observations in the first development year since reporting because the prediction data set does not contain observations for this development year. More details are provided in @hirempaper
+
+```{r}
+# Calculating the weights
+reported_claims <- observed_data %>%
+  dplyr::filter(dev.year == 1) %>%
+  group_by(rep.year) %>% 
+  dplyr::summarise(count = n()) %>%
+  pull(count)
+
+denominator <- tail(rev(cumsum(reported_claims)), -1)
+numerator <- head(cumsum(rev(reported_claims)), -1)
+weight <- c(10^(-6), numerator / denominator)
+
+names(weight) <- paste0('dev.year',1:9)
+weight
+```
+
+### Hierarchical GLM
+
+The hierarchical GLM consists of the three layer structure: settlement, payment and size. We model the settlement indicator using a binomial regression model with a complementary log link function. The payment indicator will be modeled using a logistic regression model and the payment sizes using a Gamma GLM with log-link function. 
+
+We define the model specifications of each layer. We only train the reserving model on the claim updates that are still open at the beginning of each year and are observed on the evaluation date (`calendar.year <= 9`).
+
+```{r}
+# Model specificiations hierarchical GLM
+model_glm  <- hirem(reserving_data) %>%
+  split_data(observed = function(df) df %>% filter(calendar.year <= 9, open == 1)) %>%
+  layer_glm(name = 'settlement', 'family' = binomial(link = cloglog)) %>%
+  layer_glm(name = 'payment', 'family' = binomial(link = logit)) %>%
+  layer_glm(name = 'size', 'family' = Gamma(link = 'log'), 
+            filter = function(x){x$payment == 1})
+```
+
+Next, we perform a covariate selection procedure to select the optimal covariates that are retained in the regression models for each layer. Here, we just list the formulae with the retained covariates, but the details of this covariate selection are provided in @hirempaper.
+
+```{r}
+# Formulae hierarchical GLM layers - model calibration
+formula_settle_glm <- "settlement ~ type + dev.year.fact"
+formula_pay_glm    <- "payment ~ settlement + type + devYearMonth"
+formula_size_glm   <- "size ~ devYearMonth + type + settlement + rep.month"
+```
+
+We fit the hierarchical GLM on the observed portfolio of simulated claims.
+
+```{r}
+# Fitting the hierarchical GLM
+model_glm <- fit(model_glm,
+                 weights = weight,
+                 weight.var = 'dev.year',
+                 balance.var = 'dev.year',
+                 settlement = formula_settle_glm,
+                 payment = formula_pay_glm,
+                 size = formula_size_glm)
+```
+
+### Hierarchical GBM
+
+The hierarchical GBM consists of the same three layer structure and the same distributional assumptions as the hierarchical GLM. However each layer is now modeled with a GBM instead of a GLM.
+
+We first define the model specifications of each layer. We only train the reserving model on the claim updates that are still open at the beginning of each year and are observed on the evaluation date (`calendar.year <= 9`). We tune some of the GBM parameters (number of trees, interaction depth and shrinkage) using a 5-fold cross validation approach [@hirempaper]. We list here the obtained results from the tuning strategy in the paper. We further fix the `bag.fraction` to 0.75 and the minimum number of observecations each node (`n.minobsinnode`) to 100.
+
+```{r}
+# Results of hierarchical model calibration
+gbm_param_settle <- list('n.trees' = 225, 'interaction.depth' = 1, 'shrinkage' = 0.05)
+gbm_param_pay    <- list('n.trees' = 125, 'interaction.depth' = 3, 'shrinkage' = 0.05)
+gbm_param_size   <- list('n.trees' = 700, 'interaction.depth' = 1, 'shrinkage' = 0.05)
+
+# Model specifications
+model_gbm <- hirem(reserving_data) %>%
+  split_data(observed = function(df) df %>% filter(calendar.year <= 9, open == 1)) %>%
+  layer_gbm('settlement', distribution = 'bernoulli', bag.fraction = 0.75, n.minobsinnode = 100,
+            n.trees = gbm_param_settle$n.trees, interaction.depth = gbm_param_settle$interaction.depth,
+            shrinkage = gbm_param_settle$shrinkage, select_trees = 'last') %>%
+  layer_gbm('payment', distribution = 'bernoulli', bag.fraction = 0.75, n.minobsinnode = 100,            
+            n.trees = gbm_param_pay$n.trees, interaction.depth = gbm_param_pay$interaction.depth,
+            shrinkage = gbm_param_pay$shrinkage, select_trees = 'last') %>%
+  layer_gbm('size', distribution = 'gamma', bag.fraction = 0.75, n.minobsinnode = 100,
+            n.trees = gbm_param_size$n.trees, interaction.depth = gbm_param_size$interaction.depth,
+            shrinkage = gbm_param_size$shrinkage, select_trees = 'last',
+            filter = function(data){data$payment == 1})
+```
+
+We now fit the hierarchical GBM on the observed portfolio of simulated claims.
+
+```{r}
+# Covariates
+covariates_gbm <- c('type', 'dev.year.fact', 'rep.month', 'rep.year.fact', 'rep.delay', 'calendar.year')
+
+# Fitting the hierarchical GBM
+model_gbm <- fit(model_gbm,
+                 weights = weight,
+                 weight.var = 'dev.year',
+                 balance.var = 'dev.year',
+                 settlement = paste0('settlement ~ 1 + ', paste0(covariates_gbm, collapse = ' + ')),
+                 payment = paste0('payment ~ 1 + ', paste0(c(covariates_gbm, 'settlement'), collapse = ' + ')),
+                 size = paste0('size ~ 1 + ', paste0(c(covariates_gbm,'settlement'), collapse = ' + ')))
+```
+
+## Predicting the future development of claims in the hierarchical reserving models
+In the next step, we predict the future development of claims. We do this by simulating 100 different paths for each open claim in the year of the evaluation date and by averaging the results afterwards. In this prediction strategy, the hierarchical structure of the reserving model is preserved and the development of claims are simulated in chronological order.
+
+We define an update function applied to the data for the simulation of each subsequent development year. 
+
+```{r}
+# Update function
+update <- function(data) {
+  data$dev.year <- data$dev.year + 1
+  data$dev.year.fact <- factor(data$dev.year, levels = 1:9)
+  
+  data$calendar.year <- data$calendar.year + 1
+  
+  data$monthDev12[data$dev.year > 3] <- 'dev.year > 3'
+  data$devYearMonth <- factor(paste(data$dev.year, data$monthDev12, sep = '-'))
+  
+  data
+}
+
+model_glm <- register_updater(model_glm, update)
+model_gbm <- register_updater(model_gbm, update)
+```
+
+Next, we apply the actual simulation of the development of claims over time beyond the observation window of those claims that are still open at the evaluation date (calendar year 9). Moreover, we apply the balance correction as explained in @hirempaper.
+
+```{r}
+simul_glm <- simulate(model_glm,
+                      nsim = 100,
+                      filter = function(data){dplyr::filter(data, dev.year <= 9, settlement == 0)},
+                      data = model_glm$data_observed %>% dplyr::filter(calendar.year == 9),
+                      balance.correction = TRUE)
+
+simul_gbm <- simulate(model_gbm,
+                      nsim = 100,
+                      filter = function(data){dplyr::filter(data, dev.year <= 9, settlement == 0)},
+                      data = model_gbm$data_observed %>% dplyr::filter(calendar.year == 9),
+                      balance.correction = TRUE)
+
+```
+
+## Chain-ladder model
+For comparison, we apply the classical chain ladder model to predict the total number of open claims, the total number of payments and the total payment sizes outside the observation window.
+
+We first construct the incremental run-off triangles for the number of open claims, the number of payments and the total payment sizes in each reporting year and development year since reporting in the observed portfolio. We know the number of open claims in the year following the evaluation date since we have information whether or not a claim settles in the year of settlement. 
+
+```{r}
+# Incremental run-off triangles
+triangle_open    <- construct_triangle(data = observed_data %>% filter(open == 1), group.var1 = 'rep.year', 
+                                       group.var2 = 'dev.year', value = 'open', cumulative = FALSE)
+triangle_payment <- construct_triangle(data = observed_data, group.var1 = 'rep.year',
+                                       group.var2 = 'dev.year', value = 'payment', cumulative = FALSE)
+triangle_size    <- construct_triangle(data = observed_data, group.var1 = 'rep.year',
+                                       group.var2 = 'dev.year', value = 'size', cumulative = FALSE)
+
+# Number of open claims in the year following the evaluation date
+settle.evalyear <- observed_data %>% 
+  filter(open == 1, calendar.year == 9) %>%
+  group_by(rep.year, dev.year) %>%
+  summarise(settlement = sum(settlement))
+
+# The number of open claims in the year after the evaluation date
+triangle_open[row(triangle_open) + col(triangle_open) == 11] <- 
+  (triangle_open[row(triangle_open) + col(triangle_open) == 10] - rev(settle.evalyear$settlement))[1:8]
+```
+
+We then apply (a special version of) the chain-ladder model on the incremental run-off triangle for the number of open claims. For the number of payments and the payment sizes, we use the classical chain ladder model applied on the cumulative run-off triangles.
+
+```{r}
+# Chain ladder predictions
+cl_open <- chainLadder_open(triangle_open)
+cl_pay  <- chainLadder(triangle_payment, is_cumulatif = FALSE)
+cl_size <- chainLadder(triangle_size, is_cumulatif = FALSE)
+```
+
+## Evaluating the predictive performance of the chain-ladder model and the hierarchical GLM and GBM
+
+First, we compare the prediction for the total number of open claims in the test set.
+
+```{r}
+nsim <- 100
+
+# Predictions
+obs_open_total <- prediction_data %>% filter(calendar.year != 10) %>% summarise(Total = sum(open)) %>% pull(Total)
+cl_open_total  <- sum(cl_open)
+glm_open_total <- simul_glm %>% filter(calendar.year != 10) %>% summarise(Total = sum(open)/nsim) %>% pull(Total)
+gbm_open_total <- simul_gbm %>% filter(calendar.year != 10) %>% summarise(Total = sum(open)/nsim) %>% pull(Total)
+
+# Print Results
+c('Actual' =  obs_open_total, 'Chain-Ladder' = cl_open_total, 'Hierarchical GLM' = glm_open_total, 'Hierarchical GBM' = gbm_open_total)
+```
+
+Second, we compare the prediction for the total number of payments in the prediction data set.
+
+```{r}
+# Predictions
+obs_pay_total <- prediction_data %>% filter(calendar.year != 10) %>% summarise(Total = sum(payment)) %>% pull(Total)
+cl_pay_total  <- sum(cl_pay)
+glm_pay_total <- simul_glm %>% filter(calendar.year != 10) %>% summarise(Total = sum(payment)/nsim) %>% pull(Total)
+gbm_pay_total <- simul_gbm %>% filter(calendar.year != 10) %>% summarise(Total = sum(payment)/nsim) %>% pull(Total)
+
+# Print Results
+c('Actual' = obs_pay_total, 'Chain-Ladder' = cl_pay_total, 'Hierarchical GLM' = glm_pay_total, 'Hierarchical GBM' = gbm_pay_total)
+```
+
+Third, we compare the prediction for the total number of payment sizes in the prediction set.
+
+```{r}
+# Predictions
+obs_size_total <- prediction_data %>% filter(calendar.year != 10) %>% summarise(Total = sum(size)) %>% pull(Total)
+cl_size_total  <- sum(cl_size)
+glm_size_total <- simul_glm %>% filter(calendar.year != 10) %>% summarise(Total = sum(size)/nsim) %>% pull(Total)
+gbm_size_total <- simul_gbm %>% filter(calendar.year != 10) %>% summarise(Total = sum(size)/nsim) %>% pull(Total)
+
+# Print Results
+c('Actual' = obs_size_total, 'Chain-Ladder' = cl_size_total, 'Hierarchical GLM' = glm_size_total, 'Hierarchical GBM' = gbm_size_total)
+```
+
+## References
+
+<div id="refs"></div>

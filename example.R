@@ -1,3 +1,7 @@
+# Load packages
+library(dplyr)
+library(hirem)
+
 # Construct a hierarchical reserving model with three layers: close, payment and size.
 # The layer size is only evaluated when payment == 1
 model <- hirem(reserving_data) %>%
@@ -56,10 +60,3 @@ lower_triangle_actual <- reserving_data %>%
 
 lower_triangle_actual
 lower_triangle_predicted
-
-
-
-
-fitted <- fit(model$layers[[3]], model, 'size ~ 1')
-
-filter <- dplyr::filter

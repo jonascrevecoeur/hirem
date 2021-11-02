@@ -1,17 +1,24 @@
 #' @export
-hirem_gamma_shape <- function(fit)
+hirem_gamma_shape <- function(observed, fitted, weight)
 {
   likelihood <- function(k)
   {
-    scale <- fit$fitted.values / k
-    -sum(dgamma(fit$y, shape = k, scale = scale, log = TRUE))
+    -sum(-lgamma(k*weight) + k*weight*log(k*weight) - k*weight*log(fitted) + (k*weight - 1)*log(observed) - (k*weight/fitted) * observed)
   }
 
-  start <- 1 / (sum(fit$residuals^2) / (length(fit$fitted.values) - fit$rank))
+  Dbar <- gamma_deviance(observed, fitted, weight)/length(weight) # starting value, taken from package MASS:::gamma.shape.glm
+  start <- (6 + 2 * Dbar)/(Dbar * (6 + Dbar))
 
-  fit.nlm <- nlm(likelihood, start, hessian = TRUE)
-  return(list(shape = fit.nlm$estimate, se = 1/sqrt(fit.nlm$hessian)))
+  fit.nlm <- optim(par = start, fn = likelihood, lower = 10^(-6), upper = 10^6, method = 'L-BFGS-B', hessian = TRUE)
+
+  return(list(shape = fit.nlm$par, se = as.numeric(1/sqrt(fit.nlm$hessian))))
 }
+
+#' @export
+gamma_deviance <- function(yobs, yhat, weights) {
+  c(2*sum(weights*((yobs-yhat)/yhat - log(ifelse(yobs == 0, 1, yobs/yhat))), na.rm = TRUE))
+}
+
 
 #' @export
 get_family_gamlss <- function(family_gam) {
@@ -51,21 +58,6 @@ truncated_gaussian_fit_sigma <- function(y, mu, lower = -Inf, upper = Inf, sigma
 
   return(sigma)
 
-}
-
-#' @export
-gamma_fit_shape <- function(observed, fitted)
-{
-  likelihood <- function(k)
-  {
-    scale <- fitted / k
-    -sum(weight * dgamma(observed, shape = k, scale = scale, log = TRUE))
-  }
-
-  start <- 1 / sd(fitted - observed)
-
-  fit.nlm <- nlm(likelihood, start, hessian = TRUE)
-  return(list(shape = fit.nlm$estimate, s.e. = 1/sqrt(fit.nlm$hessian)))
 }
 
 #' @export

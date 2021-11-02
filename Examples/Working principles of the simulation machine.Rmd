@@ -1,0 +1,372 @@
+---
+title: "Working principles of the simulation machine"
+author: "Jens Robben"
+date: "October 2021"
+output: bookdown::html_document2
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In this note, we provide the code and explanations to simulate a portfolio along the baseline scenario. The portfolio initially consists of $n = 125\ 000$ claims, but only the claims reported between January 1, 2012 ($t_{\min}$) and December 31, 2020 ($t_{\max}$) are retained. This leads to a 9-year observation window of reported claims.The insurer's interest is then to predict the corresponding total RBNS reserves. 
+
+## Step 0: Set-up {-}
+
+Loading the required packages
+
+```{r, warning = FALSE, message = FALSE}
+library(plyr)
+library(lubridate)
+library(tidyr)
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(tidyverse)
+options(dplyr.summarise.inform = FALSE)
+```
+
+We generate `n = 125 000` claims and fix the random number generator for reproducibility reasons.
+
+```{r, eval=TRUE}
+# Portfolio size
+n <- 125000
+set.seed(0)
+```
+
+We use the default settings in the simulation machine. 
+
+```{r}
+# Probability distribution of the covariate 'Type'
+prob.Type = c(0.60,0.25,0.15)
+
+# Probability distribution of the unobservable covariate 'Hidden'
+prob.Hidden = c(0.35,0.45,0.20)
+
+# The assumed maximal reporting delay (in years)
+max_rep_delay = 2
+
+# The assumed maximal settlement delay (in years)
+max_set_delay = 20
+```
+
+
+## Step 1: Simulating the occurrence date {-}
+Next, we sample the **occurrence dates** from a discrete uniform distribution with as support any date between '2010-01-01' and '2020-12-31' (11  years). The year 2012 will be the starting year of the observation window for evaluating the RBNS reserves. In addition, we define the occurence month and the occurrence year from the generated occurrence dates. 
+
+```{r}
+# Occurence date simulation -> Every possible date in between 2010-2020
+date_occ_seq <- seq(as.Date("2010/1/1"), as.Date("2020/12/31"), "day")
+date_occ     <- sample(date_occ_seq, size = n, replace = TRUE)
+
+base_year <- year(date_occ_seq[1]) + max_rep_delay
+df <- data.frame('occ.date' = as.character(date_occ), 'occ.year' = year(date_occ),
+                 'occ.month' = factor(month(date_occ), levels = 1:12))
+df <- df %>% mutate('occ.year.fact' = factor(occ.year, levels = sort(unique(occ.year))),
+                    .after = 'occ.year')
+```
+
+## Step 2: Simulating the covariates {-}
+We simulate **two categorical covariates** for each claim. The first `Type` refers to the type of claim and has the levels `T1` for Type 1 claims, `T2` for Type 2 claims and `T3` for Type 3 claims, with corresponding default probabilities 0.60, 0.25 and 0.15 respectively. The second covariate `Hidden` contains the levels `L`, `M` and `H` and is a hidden covariate to the insurer. The corresponding default probabilities are 0.35, 0.45 and 0.20 respectively. We simulate this covariate with the purpose of creating an unobservable heterogeneity in the simulation machine.
+
+```{r, eval = TRUE}
+# Covariate 'Type'
+x1 <- sample(c("T1","T2","T3"), size = n, replace = TRUE,  prob = prob.Type)
+x1 <- factor(x1, levels = c("T1",'T2',"T3"))
+
+# Covariate 'Hidden'
+xh <- sample(c("L","M","H"), size = n, replace = TRUE, prob = prob.Hidden)
+xh <- factor(xh, levels = c("L","M","H"))
+
+# Add to dataframe and define the claim number
+df <- data.frame('claim.nr' = 1:n, 'type' = x1, 'hidden' = xh, df)
+row.names(df) <- paste('claim',1:n)
+```
+
+Table \@ref(tab:overview1) shows an overview of the first six simulated claims together with their simulated occurrence dates as well as the two categorical claim characteristics.
+
+```{r overview1, warning = FALSE, echo = FALSE}
+head(df) %>%
+  kbl(booktabs = TRUE, caption = "Overview of six simulated claims", linesep = "") %>%
+  kable_styling("hover", full_width = F)
+```
+
+## Step 3: Simulating the reporting delay {-}
+To generate **reporting delays**, we start by taking random draws from a Beta distribution where the $\alpha$-parameter is `Type`-dependent and the $\beta$-parameter fixed to $10$. We then multiply these generated numbers with the assumed maximal reporting delay in days to obtain simulations for the reporting delay. We then convert the reporting delay back to a yearly format. Using the reporting delay, we are able to define the claim's reporting date, year and month.
+
+```{r, eval = TRUE}
+# Reporting delay simulation - in days (max two years)
+ndays        <- 365.25*max_rep_delay
+delay_report <- floor(ndays * rbeta(n, c(1,2,3)[as.numeric(x1)], 10))
+df <- df %>% dplyr::mutate('rep.delay' = as.numeric(delay_report)/365.25)
+
+# Reporting date, year and month
+date_report <- date_occ + delay_report
+
+# Expand the portfolio with the claim's reporting information
+df <- df %>%
+  dplyr::mutate('rep.date'      = as.character(date_report),
+                'rep.year'      = year(date_report) - base_year + 1,
+                'rep.year.fact' = factor(rep.year, levels = sort(unique(rep.year)), labels = sort(unique(year(date_report)))),
+                'rep.month'     = factor(month(date_report), levels = 1:12))
+  
+```
+
+Figure \@ref(fig:plotreportingdelay) shows a histogram of the simulated reporting delays in days. `T1`-claims have on average the shortest reporting delay and the smallest variance. `T3`-claims have on average the longest reporting delay and the biggest variance.
+
+```{r plotreportingdelay, eval = TRUE, fig.align='center', fig.cap="Histogram of the simulated reporting delays"}
+ggplot(df, aes(x = rep.delay*365.25, group = type, fill = type)) + 
+  theme_bw(base_size = 15) + 
+  geom_histogram(binwidth = 15, col = 'gray50') + 
+  xlab('Reporting delay (days)') + 
+  ylab('Frequency') 
+```
+
+Table \@ref(tab:overview2) shows an updated overview of the six simulated claims, extended with the claim's reporting information.
+
+```{r overview2, warning = FALSE, echo = FALSE}
+head(df) %>%
+  kbl(booktabs = TRUE, caption = "Overview of six simulated claims", linesep = "") %>%
+  kable_styling("hover", full_width = F) %>%
+  scroll_box(width = "100%")
+```
+
+## Step 4: Simulating the payment delays {-}
+In this fifth step, we simulate the continuous **payment delays** of each claim in the portfolio. For these continuous payments, we assume exponentially distributed inter-arrival times. Furthermore, we assume a maximum number of 30 payments per claim. In practice, however, not all of these payments will be made, as we will remove those payments that occur after the claim settlement date or that fall outside the 9-year observation period. The rate parameter of the exponential distribution depends on the covariate `Type`. The first continuous intermediate payment occurs faster than the other payments.
+
+```{r, eval = TRUE}
+# Simulating the 30 continuous payment dates per claim
+n.payments <- 30
+lijst <- lapply(1:n, function(x)
+  as.numeric(date_report[x]) +
+    floor(cumsum(c(rexp(1, rate = c(6,5,4)[as.numeric(x1[x])]),
+                  rexp(n.payments - 1, rate = c(2,1.5,1)[as.numeric(x1[x])])))*365.25))
+df_pay <- as.data.frame(data.table::transpose(lijst))
+colnames(df_pay) <- paste0("Pay",1:n.payments)
+```
+
+We now calculate the continuous payment delays, i.e. the time between the reporting date and the continuous payment dates. We will need this information to simulate the corresponding payment sizes in the next step.
+
+```{r}
+# 'df_pay' contains the continuous payment dates, 'df_pay_copy' contains the continuous payment delays (in years)
+df_pay_copy <- df_pay
+df_pay_copy$Report <- as.numeric(date_report)
+for(j in 1:30){
+  df_pay_copy[,j] <- (df_pay_copy[,j] - df_pay_copy$Report)/365.25
+}
+df_pay_copy <- as.data.frame(t(df_pay_copy %>% dplyr::select(-c(Report))))
+df_pay      <- as.data.frame(t(df_pay))
+```
+
+## Step 5: Simulating the payment sizes {-}
+The **payment sizes** corresponding to each continuous payment date of a claim in the portfolio are simulated from a log-normal distribution where the mean (see function `meanlog`) depends on 
+
+- the known covariate `type` by means of a base term `base` (variable `x1`),
+- the time elapsed since the reporting date (payment delay) (see term `payments`), and
+- the covariate `hidden`, which is hidden for the insurer (variable `x2`).
+
+```{r, eval = TRUE}
+# Mean of the log-normal distribution
+meanlog <- function(x1, x2){
+  base <- log(c(100,200,400)[as.numeric(x1)])
+  ext  <- 0.1*(payments)^(c(1.50,1.25,1.40)[as.numeric(x2)])
+  rep(base + ext, times = n.payments)
+}
+
+# Simulate the 30 payment sizes for each claim
+payments <- c(as.matrix(df_pay_copy))
+df_size <- matrix(rlnorm(length(payments),
+                         meanlog = meanlog(x1 = x1, x2 = xh),
+                         sdlog =  1), nrow = n, ncol = 30, byrow = T)
+
+# Arrange in a data frame 
+df_size <- as.data.frame(t(df_size))
+rownames(df_size) <- paste0("size", 1:n.payments)
+```
+
+Figure \@ref(fig:plotsize) visualizes the logarithm of the average payment size on the first, second, ... and thirtieth payment date per type of claim. We clearly observe the positive dependence of the payment delays on the payment size. The average payment size of Type 3 claims also clearly increases faster than the ones of Type 2 and Type 1. However, one should be careful with the interpretation because claims that fall outside the observation window have not yet been removed at this point in the simulation.
+
+```{r plotsize, eval = TRUE, fig.align='center', fig.cap="Barplot of the average payment size"}
+df_size_t <- as.data.frame(t(df_size)) %>% mutate(type = x1) %>%
+  tidyr::gather(key = 'number', value = 'size', - type)
+avg_size  <- df_size_t %>% group_by(type, number) %>% summarise(S = mean(size, na.rm = TRUE))
+avg_size$number <- factor(avg_size$number, levels = paste0('size',1:30))
+
+ggplot(avg_size, aes(x = number, y = log(S), fill = type, colour = type)) +
+  theme_bw(base_size = 15) + geom_bar(stat = 'identity', col = 'gray50', position = 'dodge') + xlab('k-th payment date') +
+  ylab('log(size)') + scale_x_discrete(breaks = paste0('size',c(seq(1,30,3),30)), labels = c(seq(1,30,3),30))
+```
+
+## Step 6: Simulating the settlement delay {-}
+Next, we simulate the **settlement delay** in days. To do this, we take random draws from a beta distribution where we fix the $\alpha$-parameter to $1$ and the $\beta$-parameter is `type` dependent. These generated numbers are multiplied with the assumed maximum settlement delay of 30 years. Although the observation period is only 9 years (from 2012 to 2020), we allow for a larger maximum settlement delay to account for claims that are not fully settled at the end of the observation window (to better replicate the practice).
+
+```{r, eval = TRUE}
+# Assumed maximum settlement delay (in days)
+ndays <- 365.25*max_set_delay
+
+# Generate the settlement delays for each claim
+settlement_delay <- floor(rbeta(n, shape1 = 1, shape2 = 8*c(1,0.75,0.5)[as.numeric(x1)])*ndays)
+
+# Add claim's settlement information to the portfolio
+date_settlement <- date_report + settlement_delay
+df <- df %>% dplyr::mutate("settlement.date" = as.character(date_settlement)) %>%
+  dplyr::mutate("settlement.year" = year(date_settlement))
+```
+
+Figure \@ref(fig:plotsettledelay) shows a histogram of the generated settlement delays in days, with a different colour for each claim type. `T1`-claims have on average the shortest settlement delay and the smallest variance. `T3`-claims have on average the longest settlement delay and the largest variance. The dashed line indicates the maximum tracking period of a claim (9 years).
+
+```{r plotsettledelay, eval = TRUE, fig.align='center', fig.cap="Histogram of the simulated settlement delays"}
+ggplot(data.frame('settlement' = settlement_delay, df), aes(x = settlement, group = type, fill = type)) +
+  theme_bw(base_size = 15) + geom_histogram(binwidth = 200,col = 'gray50') + xlab('Settlement delay (days)') +
+  ylab('Frequency') + geom_vline(xintercept = 365.25*9, linetype = 'dashed', colour = 'gray50')
+```
+
+In addition, we remove the continuous payments of a claim that occur after its settlement date.
+
+```{r}
+# Remove payments that occur after settlement date
+max_delays <- as.numeric(date_settlement)
+df_pay  <- t(df_pay)
+df_size <- t(df_size)
+ind <- which(df_pay > max_delays, arr.ind = TRUE)
+df_pay[ind] = df_size[ind] <- NA
+df_pay  <- t(df_pay)
+df_size <- t(df_size)
+```
+
+Table \@ref(tab:overview3) shows an updated overview of the six simulated claims, extended with the settlement information.
+
+```{r overview3, warning = FALSE, echo = FALSE}
+head(df) %>%
+  kbl(booktabs = TRUE, caption = "Overview of six simulated claims", linesep = "") %>%
+  kable_styling("hover", full_width = F) %>%
+  scroll_box(width = "100%")
+```
+
+
+## Step 7: Data wrangling {-}
+Here, we apply some data wrangling steps. First, we move from a continuous time setting to a discrete time setting on an annual basis. Hereto, we first define the end dates of each year (December 31, yyyy). Next, we split the vector of payment dates of each claim (each column in the df_pay-matrix) by years. For example, a continuous payment occurring at Mars 25, 2017 of a claim that occurred at June 21, 2012 belongs to development year 6 since reporting of this claim. Development year 1 corresponds to the reporting year itself, namely the year 2012 in this case. We track the claims up to a maximum of 9 development years since reporting.
+
+```{r}
+# Define the end dates of each year (to group the data by years)
+breaks <- as.numeric(as.Date(paste0(2009:2040,"-12-31")))
+names(breaks) <- 2009:2040
+
+# Group the continuous payments dates by development year since reporting
+  calc_obs_year <- function(k){
+    pay_dates <- na.omit(as.numeric(df_pay[,k]))
+    rep.year  <- df$rep.year[k] + base_year - 1
+    breaks.k  <- breaks[as.character((rep.year - 1):(rep.year + 8))]
+    vec0      <- (diff(rank(c(breaks.k+0.0001, pay_dates)))-1)[1:(length(breaks.k)-1)]
+    vec1      <- as.numeric(rep(names(vec0), times = vec0)) - rep.year + 1
+    vec       <- c(vec1, rep(NA, length(pay_dates) - length(vec1)))
+    vec
+  }
+obs_years <- lapply(1:n, function(k) calc_obs_year(k))
+```
+
+We can now easily aggregate the payment sizes that belong to the same development year since reporting.
+
+```{r}
+# Aggregrate claim sizes belonging to same development year since reporting
+agg_fu <- function(k){
+  obsy  <- obs_years[[k]]
+  vec   <- if(length(obsy) > 0) sapply(na.omit(df_size[,k]) %>% split(obsy), FUN = sum) else NULL
+  vec.add <- rep(0, 9 - length(vec))
+  names(vec.add) <- as.character(1:9)[! as.character(1:9) %in% names(vec)]
+  vec <- c(vec,vec.add)
+  vec[order(names(vec))]
+}
+
+df.size <- t(sapply(1:n, function(k) agg_fu(k)))
+colnames(df.size) <- paste0('size_obs', 1:9)
+```
+
+Figure \@ref(fig:plotsizeobs) displays the average intermediate payment size per claim type as a function of the development year since reporting (given that an intermediate payment took place). The average intermediate payment size per development year is the largest for claims of Type 1 which may seem to be in contradiction with Figure \@ref(fig:plotsize). However, since the average continuous payment delays of a claim of Type 1 are smaller (See Step 4) and since many of the large payment sizes of claims of Type 2 and Type 3 in Figure \@ref(fig:plotsize) are removed because they fall outside the observation window, we here observe the opposite effect.
+
+```{r plotsizeobs, eval = TRUE, fig.align='center', fig.cap="Barplot of the average payment size per development year since reporting"}
+df.size.t <- as.data.frame(df.size) %>% mutate(type = x1) %>%
+  tidyr::gather(key = 'OY', value = 'size', - type)
+avg_size  <- df.size.t %>% group_by(type, OY) %>% summarise(S = mean(size[size > 0], na.rm = TRUE))
+
+ggplot(avg_size, aes(x = OY, y = log(S), fill = type, colour = type)) +
+  theme_bw(base_size = 15) + geom_bar(stat = 'identity', col = 'gray50', position = 'dodge') + 
+  xlab('Development year since reporting') + ylab('log(Size)') + 
+  scale_x_discrete(breaks = paste0('size_obs',1:9), labels = c(1:9))
+```
+
+In addition, we construct the object `df.open` which indicates whether a claim is still open at the beginning of each development year. The object `df.close` indicates whether a claim is closed at the end of each development year.
+
+```{r, eval = TRUE}
+# Is open indicator
+create_open <- function(ones){
+  ones.vec <- rep(0, 9)
+  ones.vec[1:(min(ones+1,9))] <- 1
+  ones.vec
+}
+df.open <- t(sapply(df$settlement.year - df$rep.year, create_open))
+colnames(df.open) <- paste0("open_obs", 1:9)
+
+# Settlement indicator (close)
+create_settlement <- function(zeros){
+  zeros.vec <- rep(1,9)
+  zeros.vec[0:min(zeros,9)] <- 0
+  zeros.vec
+}
+df.settlement <- t(sapply(df$settlement.year - df$rep.year, create_settlement))
+colnames(df.settlement) <- paste0("settlement_obs", 1:9)
+```
+
+We now add the open, settlement and size information per development year since reporting to the portfolio (see Table \@ref(tab:overview4)).
+
+```{r, eval = TRUE}
+# Add to dataset
+df <- df %>% bind_cols(as_tibble(df.open)) %>% bind_cols(as_tibble(df.settlement)) %>%
+  bind_cols(as_tibble(df.size))
+```
+
+```{r overview4, warning = FALSE, echo = FALSE}
+head(df) %>%
+  kbl(booktabs = TRUE, caption = "Overview of six simulated claims", linesep = "") %>%
+  kable_styling("hover", full_width = F) %>%
+  scroll_box(width = "100%")
+```
+<br> 
+
+Next, we perform some last steps. First, we remove all claims with a reporting year before the year 2012 or after the year 2020. Second, we 'lengthen' the portfolio such that we get 9 observations per claim, i.e. one row per development year since reporting. Third, we add the development year as a column to our portfolio. Lastly, we define a covariate that reflects the calendar year of each observation and a covariate that indicates whether a payment takes place in each development year.
+
+```{r, eval = TRUE}
+# Remove claims with reporting year later than 2028
+df <- df %>% filter(rep.year <= 9, rep.year >= 1)
+df <- df %>% mutate(rep.year.fact = factor(rep.year, levels = 1:9))
+
+# Put in long format
+df.long <- df %>% pivot_longer(cols = starts_with(c('open_obs', 'settlement_obs', 'size_obs')),
+                               names_to = c(".value", "obs"),
+                               names_sep = "_")
+
+# Add development year variable
+df.long <- df.long %>%
+  dplyr::mutate('dev.year.fact' =  recode_factor(obs, obs1 = 1, obs2 = 2, obs3 = 3, obs4 = 4, obs5 = 5, obs6 = 6,
+                                                 obs7 = 7, obs8 = 8, obs9 = 9), .before = 'open') %>%
+  dplyr::mutate('dev.year' = as.numeric(as.character(dev.year.fact)), .before = 'dev.year.fact') %>%
+  dplyr::select(-c(obs))
+
+# Add calendar year and payment variable
+df.long <- df.long %>% dplyr::mutate('calendar.year' = rep.year + dev.year - 1, .after = 'dev.year.fact') %>%
+  dplyr::mutate('payment' = (size > 0)*1, .before = 'size')
+```
+
+Table \@ref(tab:overview5) shows the final result for the first two claims (18 observations).
+
+```{r overview5, warning = FALSE, echo = FALSE}
+head(df.long, 18) %>%
+  kbl(booktabs = TRUE, caption = "Overview of six simulated claims", linesep = "") %>%
+  kable_styling("hover", full_width = F) %>%
+  scroll_box(width = "100%", height = "400px")
+```
+
+
+
+

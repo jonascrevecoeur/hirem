@@ -4,7 +4,7 @@
 \alias{simulate.hirem}
 \title{Simulate the future development of claims}
 \usage{
-\method{simulate}{hirem}(obj, nsim, filter, data)
+\method{simulate}{hirem}(obj, nsim, filter, data, balance.correction = FALSE)
 }
 \arguments{
 \item{obj}{The hierarchical reserving model}
@@ -17,6 +17,8 @@
 }}
 
 \item{data}{Last observed record for each claim. From these records onwards the future development is simulated.}
+
+\item{balance.correction}{Logical. Apply a bias correction step: yes or no?}
 }
 \value{
 A data set with the same structure as the input data set, containing multiple simulations for the future development of each claim.
