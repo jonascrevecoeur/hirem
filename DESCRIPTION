@@ -2,8 +2,8 @@ Package: hirem
 Type: Package
 Title: Hierarchical reserving models
 Version: 0.1.0
-Authors@R: person("Jonas", "Crevecoeur", email = "jonas.crevecoeur@kuleuven.be",
-  role = c("aut", "cre"))
+Authors@R: c(person("Jonas", "Crevecoeur", email = "jonas.crevecoeur@kuleuven.be", role = c("aut", "cre")),
+             person("Jens", "Robben", email = "jens.robben@kuleuven.be", role = c("aut")))
 Maintainer: Jonas Crevecoeur <jonas.crevecoeur@kuleuven.be>
 Description: The goal of hirem is to provide an easy programming environment for constructing hierarchical reserving models by adding layers.
 License: MIT + file LICENSE

@@ -11,7 +11,7 @@ devtools::install_github('jonascrevecoeur/hirem')
 ```
 
 ## Overview
-The `hirem` package offers tools for implementing hierarchical reserving models, introduced in the paper [Crevecoeur, J., Antonio, K., A generalized reserving model: bridging the gap between pricing and individual reserving, (2019)](https://arxiv.org/abs/1910.12692).
+The `hirem` package offers tools for implementing hierarchical reserving models, introduced in the paper [Crevecoeur, J., Robben J., Antonio, K., A hierarchical reserving model for reported non-life insurance claims, (2021)](https://arxiv.org/abs/1910.12692).
 
 The `hirem` package constructs hierarchical reserving models by sequentially adding new layers. An example of a three component hierarchical model:
 

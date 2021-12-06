@@ -19,6 +19,7 @@ First, we load the required packages.
 ```{r, results='hide'}
 require(hirem)
 require(tidyverse)
+library(tidyr)
 ```
 
 We simulate one portfolio (with `set.seed = 1`) along the extreme event scenario. The portfolio initially consists of $125\ 000$ claims, but only the claims that are reported between January 1, 2012 and December 31, 2020 are retained. Claims are tracked over 9 development years since reporting. We let the extreme event (of 30 days) occur somewhere randomly in the year 2019. In addition, we create an extra covariate `devYearMonth`, representing a simplified version of the interaction effect between `dev.year` and `rep.month`.
