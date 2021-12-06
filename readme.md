@@ -47,7 +47,19 @@ To use the `gamma` distribution in `layer_gbm` you require an experimental versi
 https://github.com/harrysouthworth/gbm.
 
 Use the links below to view examples and vignettes in your current browser:
-Vignette: https://htmlpreview.github.io/?https://github.com/jonascrevecoeur/hirem/blob/master/inst/doc/hrm.html
-Connection between aggregate and individual reserving: https://htmlpreview.github.io/?https://github.com/jonascrevecoeur/hirem/blob/master/Examples/Connection_individual_aggregate.html
-Principles of the simulation machine: https://htmlpreview.github.io/?https://github.com/jonascrevecoeur/hirem/blob/master/Examples/Working-principles-of-the-simulation-machine.html
-Application on a simulated portfolio: https://htmlpreview.github.io/?https://github.com/jonascrevecoeur/hirem/blob/master/Examples/Scenario-testing-on-simulated-portfolio.html
+
+Vignette: 
+
+https://htmlpreview.github.io/?https://github.com/jonascrevecoeur/hirem/blob/master/inst/doc/hrm.html
+
+Connection between aggregate and individual reserving: 
+
+https://htmlpreview.github.io/?https://github.com/jonascrevecoeur/hirem/blob/master/Examples/Connection_individual_aggregate.html
+
+Principles of the simulation machine: 
+
+https://htmlpreview.github.io/?https://github.com/jonascrevecoeur/hirem/blob/master/Examples/Working-principles-of-the-simulation-machine.html
+
+Application on a simulated portfolio: 
+
+https://htmlpreview.github.io/?https://github.com/jonascrevecoeur/hirem/blob/master/Examples/Scenario-testing-on-simulated-portfolio.html
